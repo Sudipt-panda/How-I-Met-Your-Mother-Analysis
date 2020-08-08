@@ -1,0 +1,446 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+library(rvest)
+library(tidyverse)
+library(stringr)
+library(tidytext)
+
+main_url <- "http://transcripts.foreverdreaming.org"
+all_pages <- paste0("http://transcripts.foreverdreaming.org/viewforum.php?f=177&start=", seq(0, 200, 25))
+characters <- c("ted", "lily", "marshall", "barney", "robin")
+```
+
+```{r}
+library(purrr)
+episode_getter <- function(link) {
+  title_reference <-
+    link %>%
+    read_html() %>%
+    html_nodes(".topictitle") # Get the html node name with 'selector gadget'
+  
+  episode_links <-
+    title_reference %>%
+    html_attr("href") %>%
+    gsub("^.", "", .) %>%
+    paste0(main_url, .) %>%
+    setNames(title_reference %>% html_text()) %>%
+    enframe(name = "episode_name", value = "link")
+  
+  episode_links
+}
+
+all_episodes <- map_df(all_pages, episode_getter) # loop over all seasons and get all episode links
+all_episodes$id <- 1:nrow(all_episodes)
+```
+
+
+```{r}
+all_episodes
+```
+
+
+```{r}
+episode_fun <- function(file) {
+  
+  file %>%
+    read_html() %>%
+    html_nodes(".postbody") %>%
+    html_text() %>%
+    str_split("\n|\t") %>%
+    .[[1]] %>%
+    data_frame(text = .) %>%
+    filter(str_detect(text, ""), # Lots of empty spaces
+           !str_detect(text, "^\\t"), # Lots of lines with \t to delete
+           !str_detect(text, "^\\[.*\\]$"), # Text that start with brackets
+           !str_detect(text, "^\\(.*\\)$"), # Text that starts with parenthesis
+           str_detect(text, "^*.:"), # I want only lines with start with dialogue (:)
+           !str_detect(text, "^ad")) # Remove lines that start with ad (for 'ads', the link of google ads)
+}
+```
+
+```{r}
+all_episodes$text <- map(all_episodes$link, episode_fun)
+```
+
+```{r}
+all_episodes$count <- map_dbl(all_episodes$text, nrow)
+```
+
+
+```{r}
+all_episodes <-
+  all_episodes %>%
+  separate(episode_name, c("season", "episode"), sep = "-", extra = "merge") %>%
+  separate(season, c("season", "episode_number"), sep = "x")
+```
+
+```{r}
+all_episodes<- all_episodes[-which(is.na(all_episodes$episode_number)), ]
+
+```
+
+
+```{r}
+lines_characters <-
+  map(filter(all_episodes, count > 100) %>% pull(text), ~ { 
+    # only loop over episodes that have over 100 lines
+    .x %>%
+      separate(text, c("character", "text"), sep = ":", extra = 'merge') %>%
+      # separate character dialogue from actual dialogo
+      unnest_tokens(character, character) %>%
+      filter(str_detect(character, paste0(paste0("^", characters, "$"), collapse = "|"))) %>%
+      # only count the lines of our chosen characters
+      mutate(episode_lines_id = 1:nrow(.))
+  }) %>%
+  setNames(filter(all_episodes, count > 100) %>% # name according to episode
+             unite(season_episode, season, episode_number, sep = "x") %>%
+             pull(season_episode)) %>%
+  enframe() %>%
+  unnest() %>%
+  mutate(all_lines_id = 1:nrow(.))
+```
+
+
+```{r}
+lines_characters_1 <-
+   lines_characters %>%
+  arrange(name) %>%
+  separate(name, c("season", "episode"), sep = "x", remove = FALSE) %>%
+  mutate(name = factor(name, ordered = TRUE),
+         season = factor(season, ordered = TRUE),
+         episode = factor(episode, ordered = TRUE))
+```
+
+
+
+```{r}
+barney_lines <-
+  lines_characters_1 %>%
+  filter(character == "barney")
+barney_lines_per_season <- barney_lines %>% select(season,text)
+barney_lines_per_season$text <- tolower(barney_lines_per_season$text)
+
+suit_up <- str_count(barney_lines_per_season$text, "suit up")
+legendary <- str_count(barney_lines_per_season$text, "legendary")
+challenge_accepted <- str_count(barney_lines_per_season$text, "challenge accepted")
+have_you_met <- str_count(barney_lines_per_season$text, "have you met")
+awesome <- str_count(barney_lines_per_season$text, "awesome")
+wait_for_it <- str_count(barney_lines_per_season$text, "wait for it")
+self_five <- str_count(barney_lines_per_season$text, "self five")
+true_story <- str_count(barney_lines_per_season$text, "true story")
+what_up <- str_count(barney_lines_per_season$text, "what up")
+patent_pending <- str_count(barney_lines_per_season$text, "patent pending")
+
+barney_catch_phrases <- cbind(barney_lines_per_season,suit_up,legendary,challenge_accepted,have_you_met,awesome,wait_for_it,self_five,true_story,what_up,patent_pending)
+
+barney_catch_phrases <- select(barney_catch_phrases,-c('text'))
+
+barney_final <- barney_catch_phrases %>%
+group_by(season) %>% 
+    summarise_each(funs(sum))
+
+```
+
+```{r}
+data <- t(barney_final[,2:11])
+
+colnames(data) <- barney_final$season
+
+barplot(data,legend.text = rownames(data),beside=T,xlab='Row', ylab='Value',col = rainbow(7))
+```
+
+```{r}
+k <-3
+barney_final_1 <- barney_final[,2:7]
+mx <- t(apply(barney_final_1,1,function(x)names(barney_final_1)[sort(head(order(x,decreasing=TRUE),k))]))
+mx1 <- cbind(barney_final$season,mx)
+mx1 <- data.frame(mx1)
+```
+
+```{r}
+names(mx1)[names(mx1) == "X1"] <- "Seasons"
+names(mx1)[names(mx1) == "X2"] <- "Catch_Phrase1"
+names(mx1)[names(mx1) == "X3"] <- "Catch_Phrase2"
+names(mx1)[names(mx1) == "X4"] <- "Catch_Phrase3"
+mx1
+```
+
+
+```{r}
+lines_characters <-
+  lines_characters %>%
+  mutate(text = str_to_lower(text))
+
+rows_fil <-
+  map(characters, ~ str_detect(lines_characters$text, .x)) %>%
+  reduce(`+`) %>%
+  ifelse(. >= 2, 0, .) # excluding sentences which have 2 or more mentions for now
+  # ideally we would want to choose to count the number of mentions
+  # per line or randomly choose another a person that was mentioned.
+```
+
+```{r}
+character_relation <-
+  lines_characters %>%
+  filter(as.logical(rows_fil)) %>%
+  mutate(who_said_what =
+           map_chr(.$text, ~ { # loop over all each line
+             who_said_what <- map_lgl(characters, function(.y) str_detect(.x, .y))
+             # loop over each character and check whether he/she was mentioned
+             # in that line
+             characters[who_said_what]
+             # subset the character that matched
+           }))
+```
+
+```{r}
+library(ggraph)
+library(igraph)
+
+character_relation %>%
+  count(character, who_said_what) %>%
+  graph_from_data_frame() %>%
+  ggraph(layout = "linear", circular = TRUE) +
+  geom_edge_arc(aes(edge_alpha = n, edge_width = n ,edge_colour = "black"),
+                width = 2.5, show.legend = FALSE) +
+  geom_node_text(aes(label = name), repel = TRUE) +
+  theme_void()
+```
+
+```{r}
+library(cowplot)
+
+# Loop through each season
+seasons <- paste0(0, 1:7)
+
+all_season_plots <- lapply(seasons, function(season_num) {
+
+  set.seed(2131)
+  
+  character_relation %>%
+    # Extract the season number from the `name` column
+    mutate(season = str_replace_all(character_relation$name, "x(.*)$", "")) %>%
+    filter(season == season_num) %>%
+    count(character, who_said_what) %>%
+    graph_from_data_frame() %>%
+    ggraph(layout = "linear", circular = TRUE) +
+    geom_edge_arc(aes(edge_alpha = n, edge_width = n ,edge_colour = "black"),
+                  width = 2.5, show.legend = FALSE) +
+    geom_node_text(aes(label = name), repel = TRUE) +
+    theme_void()
+})
+
+# Plot all graphs side-by-side
+cowplot::plot_grid(plotlist = all_season_plots, labels = seasons)
+```
+
+
+```{r}
+words_per_character <-
+  lines_characters %>%
+  unnest_tokens(word, text) %>% # expand all sentences into words
+  anti_join(stop_words) %>% # remove bad words
+  filter(!word %in% characters) %>% # only select characters we're interested
+  arrange(name) %>%
+  separate(name, c("season", "episode"), sep = "x", remove = FALSE) %>%
+  mutate(name = factor(name, ordered = TRUE),
+         season = factor(season, ordered = TRUE),
+         episode = factor(episode, ordered = TRUE)) %>%
+  filter(season != "07")
+```
+
+```{r}
+# Filtering position of first episode of all seasons to
+# position the X axis in the next plot.
+first_episodes <-
+  all_episodes %>%
+  filter(count > 100, episode_number == "01 ") %>%
+  pull(id)
+
+words_per_character %>%
+  split(.$name) %>%
+  setNames(1:length(.)) %>%
+  enframe(name = "episode_id") %>%
+  unnest() %>%
+  count(episode_id, character) %>%
+  group_by(episode_id) %>%
+  mutate(total_n = sum(n),
+         perc = round(n / total_n, 2)) %>%
+  ggplot(aes(as.numeric(episode_id), perc, group = character, colour = character)) +
+  geom_line() +
+  geom_smooth(method = "lm") +
+  scale_colour_discrete(guide = FALSE) +
+  scale_x_continuous(name = "Seasons",
+                     breaks = first_episodes, labels = paste0("S", 1:7)) +
+  scale_y_continuous(name = "Percentage of words per episode") +
+  theme_minimal() +
+  facet_wrap(~ character, ncol = 3)
+```
+
+
+```{r}
+# devtools::install_github("clauswilke/ggjoy")
+library(ggjoy)
+
+words_per_character %>%
+  split(.$name) %>%
+  setNames(1:length(.)) %>%
+  enframe(name = "episode_id") %>%
+  unnest() %>%
+  count(season, episode_id, character) %>%
+  group_by(episode_id) %>%
+  mutate(total_n = sum(n),
+         perc = round(n / total_n, 2)) %>%
+  ggplot(aes(x = perc, y = character, fill = character)) +
+  geom_joy(scale = 0.85) +
+  scale_fill_discrete(guide = F) +
+  scale_y_discrete(name = NULL, expand=c(0.01, 0)) +
+  scale_x_continuous(name = "Percentage of words", expand=c(0.01, 0)) +
+  ggtitle("Percentage of words per season") +
+  facet_wrap(~ season, ncol = 7) +
+  theme_minimal()
+```
+
+```{r}
+## app.R ##
+library(shiny)
+library(shinydashboard)
+
+ui <- dashboardPage(
+  skin = "purple",
+  dashboardHeader(title = "HIMYM Analysis"),
+  dashboardSidebar(
+     sidebarMenu(
+      menuItem("Barney Catchphrases", tabName = "Barney_Catchphrases", icon = icon("bar-chart-o")),
+      menuItem("Character Relations", tabName = "Character_Relations", icon = icon("list-alt")),
+      menuItem("Words per Character", tabName = "Words_per_Character", icon = icon("atom"))
+    )
+  ),
+  dashboardBody(
+    # Boxes need to be put in a row (or column)
+     tabItems(
+      # First tab content
+      tabItem(tabName = "Barney_Catchphrases",
+              h2("Catchphrases used by Barney Stinson over the seasons"), 
+      fluidRow(
+        box(title = "Distribution of catch phrases used by barney over the seasons",
+        plotOutput("plot1",width = "233%", height = 650)),
+        
+        column(12,box(title = "Table showing top 3 catch phrases over the seasons",
+            tableOutput('table'),width = "100%"))
+        )
+        ),
+tabItem(tabName = "Character_Relations",
+        h2("Relationship graph of the characters"),
+        fluidRow(
+          box(title = "Relationship graph of charcters per season",
+              plotOutput("plot3",width = "220%", height = 400)),
+          column(12,box(title = "Relationship graph of charcters overall",
+            plotOutput("plot2",width = "100%", height = 200)))
+        )
+      
+      ),
+tabItem(tabName = "Words_per_Character",
+        h2("Total number of words spoken by each character"),
+        fluidRow(
+          tabBox(title = "Words per Character", height = 650, width = "235%",
+          tabPanel("Percentage of words over time",
+            plotOutput("plot4",width = "100%", height = 250)),
+          tabPanel("Percentage of words per season",
+            plotOutput("plot5",width = "100%", height = 400))
+        )
+      )
+    )
+     )   
+    
+  )
+)
+
+server <- function(input, output) {
+  set.seed(122)
+
+  output$plot1 <- renderPlot({
+barplot(data,legend.text = rownames(data),beside=T,xlab='Row', ylab='Value',col = rainbow(7))
+  })
+  output$table <- renderTable(mx1)
+  
+  output$plot2 <- renderPlot({
+    character_relation %>%
+  count(character, who_said_what) %>%
+  graph_from_data_frame() %>%
+  ggraph(layout = "linear", circular = TRUE) +
+  geom_edge_arc(aes(edge_alpha = n, edge_width = n ,edge_colour = "black"),
+                width = 2.5, show.legend = FALSE) +
+  geom_node_text(aes(label = name), repel = TRUE) +
+  theme_void()
+  })
+  
+  output$plot3 <- renderPlot({
+  cowplot::plot_grid(plotlist = all_season_plots, labels = seasons)
+    }) 
+  
+  output$plot4 <- renderPlot({
+        words_per_character %>%
+  split(.$name) %>%
+  setNames(1:length(.)) %>%
+  enframe(name = "episode_id") %>%
+  unnest() %>%
+  count(episode_id, character) %>%
+  group_by(episode_id) %>%
+  mutate(total_n = sum(n),
+         perc = round(n / total_n, 2)) %>%
+  ggplot(aes(as.numeric(episode_id), perc, group = character, colour = character)) +
+  geom_line() +
+  geom_smooth(method = "lm") +
+  scale_colour_discrete(guide = FALSE) +
+  scale_x_continuous(name = "Seasons",
+                     breaks = first_episodes, labels = paste0("S", 1:7)) +
+  scale_y_continuous(name = "Percentage of words per episode") +
+  theme_minimal() +
+  facet_wrap(~ character, ncol = 3)
+        })
+  
+  output$plot5 <- renderPlot({
+            words_per_character %>%
+  split(.$name) %>%
+  setNames(1:length(.)) %>%
+  enframe(name = "episode_id") %>%
+  unnest() %>%
+  count(season, episode_id, character) %>%
+  group_by(episode_id) %>%
+  mutate(total_n = sum(n),
+         perc = round(n / total_n, 2)) %>%
+  ggplot(aes(x = perc, y = character, fill = character)) +
+  geom_joy(scale = 0.85) +
+  scale_fill_discrete(guide = F) +
+  scale_y_discrete(name = NULL, expand=c(0.01, 0)) +
+  scale_x_continuous(name = "Percentage of words", expand=c(0.01, 0)) +
+  ggtitle("Percentage of words per season") +
+  facet_wrap(~ season, ncol = 7) +
+  theme_minimal()
+        })
+}
+
+shinyApp(ui, server)
+```
+
+```{r}
+library(ggjoy)
+```
+
+
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+
